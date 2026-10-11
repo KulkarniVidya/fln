@@ -20,6 +20,17 @@ interface StudentListPanelProps {
   refreshStudents: () => void;
 }
 
+export function extractInvalidStudentRows(
+  invalidRows: any[],
+  parsedRows: any[],
+  csvResults: { results: any[] }
+): (string | number)[][] {
+  return invalidRows.map(row => {
+    const outcome = csvResults.results.find((r: any) => r.row === parsedRows.indexOf(row) + 1);
+    return [row.name, row.section, row.age, row.classGroup, row.aadharNumber, row.address, outcome ? outcome.reason : ''];
+  });
+}
+
 export const StudentListPanel: React.FC<StudentListPanelProps> = ({
   students,
   studentsLoading,
@@ -223,10 +234,7 @@ export const StudentListPanel: React.FC<StudentListPanelProps> = ({
     if (invalidRows.length === 0) return;
 
     const headers = ['name', 'section', 'age', 'classGroup', 'aadharNumber', 'address', 'reason'];
-    downloadCsv('invalid_students.csv', buildCsv(headers, invalidRows.map(row => {
-      const outcome = csvResults.results.find((r: any) => r.row === parsedRows.indexOf(row) + 1);
-      return [row.name, row.section, row.age, row.classGroup, row.aadharNumber, row.address, outcome ? outcome.reason : ''];
-    })));
+    downloadCsv('invalid_students.csv', buildCsv(headers, extractInvalidStudentRows(invalidRows, parsedRows, csvResults)));
   };
 
   return (

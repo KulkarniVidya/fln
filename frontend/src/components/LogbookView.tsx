@@ -9,6 +9,20 @@ interface LogbookViewProps {
   user?: User | null;
 }
 
+export function extractLogbookRows(logs: LogEntry[]): (string | number)[][] {
+  return logs.map(l => [
+    new Date(l.timestamp).toISOString(),
+    l.id,
+    l.userEmail,
+    l.userRole,
+    l.schoolId || 'National',
+    l.schoolName || 'National Framework',
+    l.activityType,
+    l.status,
+    l.details,
+  ]);
+}
+
 export const LogbookView: React.FC<LogbookViewProps> = ({ token, user }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
@@ -124,19 +138,7 @@ export const LogbookView: React.FC<LogbookViewProps> = ({ token, user }) => {
     if (filteredLogs.length === 0) return;
     
     const headers = ['Timestamp', 'Log ID', 'User Email', 'User Role', 'Location School ID', 'Location School Name', 'Activity', 'Status', 'Details'];
-    
-    const rows = filteredLogs.map(l => [
-      new Date(l.timestamp).toISOString(),
-      l.id,
-      l.userEmail,
-      l.userRole,
-      l.schoolId || 'National',
-      l.schoolName || 'National Framework',
-      l.activityType,
-      l.status,
-      l.details,
-    ]);
-    
+    const rows = extractLogbookRows(filteredLogs);
     downloadCsv(`FLN_System_Logbook_Export_${new Date().toISOString().split('T')[0]}.csv`, buildCsv(headers, rows));
   };
 

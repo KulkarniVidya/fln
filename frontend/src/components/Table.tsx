@@ -21,6 +21,14 @@ interface TableProps<T> {
   emptyMessage?: string;
 }
 
+export function extractTableRows<T extends Record<string, any>>(data: T[], columns: Column<T>[]): (string | number)[][] {
+  return data.map(row => columns.map(col => {
+    if (col.exportValue) return col.exportValue(row);
+    if (typeof col.accessor === 'function') return row[col.sortKey as string] ?? row[col.filterKey as string] ?? '';
+    return row[col.accessor] ?? '';
+  }));
+}
+
 export function Table<T extends Record<string, any>>({
   data,
   columns,
@@ -139,11 +147,7 @@ export function Table<T extends Record<string, any>>({
     if (processedData.length === 0) return;
     
     const headers = columns.map(c => c.header);
-    const rows = processedData.map(row => columns.map(col => {
-      if (col.exportValue) return col.exportValue(row);
-      if (typeof col.accessor === 'function') return row[col.sortKey as string] ?? row[col.filterKey as string] ?? '';
-      return row[col.accessor] ?? '';
-    }));
+    const rows = extractTableRows(processedData, columns);
     downloadCsv('exported_table_data.csv', buildCsv(headers, rows));
   };
 
