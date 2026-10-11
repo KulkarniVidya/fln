@@ -2,6 +2,7 @@ import { apiFetch } from '../services/apiClient';
 import React, { useState, useEffect } from 'react';
 import { LogEntry, UserRole, User, School } from '../types';
 import { Download, Search, SlidersHorizontal } from 'lucide-react';
+import { buildCsv, downloadCsv } from '../utils/csv';
 
 interface LogbookViewProps {
   token: string;
@@ -133,19 +134,10 @@ export const LogbookView: React.FC<LogbookViewProps> = ({ token, user }) => {
       l.schoolName || 'National Framework',
       l.activityType,
       l.status,
-      `"${l.details.replace(/"/g, '""')}"`
+      l.details,
     ]);
     
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `FLN_System_Logbook_Export_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(`FLN_System_Logbook_Export_${new Date().toISOString().split('T')[0]}.csv`, buildCsv(headers, rows));
   };
 
   // Check locks for selectors based on user roles
