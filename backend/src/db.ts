@@ -1975,6 +1975,13 @@ export class DBStore {
     if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({}).toArray();
     return this.data?.worksheets || [];
   }
+  /** Worksheets with the given ids; used to resolve the questions behind a student's evaluation reports. */
+  async getWorksheetsByIds(ids: string[]): Promise<Worksheet[]> {
+    if (ids.length === 0) return [];
+    if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({ id: { $in: ids } }).toArray();
+    const wanted = new Set(ids);
+    return (this.data?.worksheets || []).filter(w => wanted.has(w.id));
+  }
   async getStudentCycleLocks() {
     if (this.mongoDb) return await this.mongoDb.collection<StudentCycleLock>('studentCycleLocks').find({}).toArray();
     return this.data?.studentCycleLocks || [];
