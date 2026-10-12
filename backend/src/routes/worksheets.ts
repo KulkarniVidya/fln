@@ -7,6 +7,7 @@ import { getAuthUser } from '../auth';
 import { generateQuestionsForLevel } from '../levelGenerator';
 import * as levelsBackendClient from '../levelsBackendClient';
 import { ROOT_DIR } from '../config';
+import { PAPER_TYPE_CONFIG, getPaperTypeConfig } from '../config/paperTypeConfig';
 import { recordStudentCycleLock } from '../paperLock';
 import {
   getGenerationWindowStatus,
@@ -526,6 +527,20 @@ export function registerWorksheetRoutes(app: express.Express) {
   // the same sheet again.
   const CONCEPT_BATCH_ROLES = new Set<UserRole>([UserRole.SUPERADMIN, UserRole.SCHOOL, UserRole.TEACHER, UserRole.VOLUNTEER]);
   const MAX_QUESTIONS_PER_BATCH = 200;
+
+  // The fixed question count and level scope of each paper type (#593). Any
+  // signed-in user may read it; it holds no student data.
+  app.get('/api/paper-types/config', (req, res) => {
+    if (!getAuthUser(req)) return res.status(401).json({ error: 'Unauthorized' });
+    res.json({ paperTypes: Object.values(PAPER_TYPE_CONFIG) });
+  });
+
+  app.get('/api/paper-types/:type/config', (req, res) => {
+    if (!getAuthUser(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const config = getPaperTypeConfig(req.params.type);
+    if (!config) return res.status(404).json({ error: `Unknown paper type. Use one of: ${Object.keys(PAPER_TYPE_CONFIG).join(', ')}.` });
+    res.json(config);
+  });
 
   app.post('/api/worksheets/generate-concept-batch', async (req, res) => {
     const user = getAuthUser(req);
