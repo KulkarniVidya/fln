@@ -1563,6 +1563,11 @@ export class DBStore {
     if (this.mongoDb) return await this.mongoDb.collection<School>('schools').find({}).toArray();
     return this.data?.schools || [];
   }
+  async getSchoolById(id: string): Promise<School | null> {
+    if (!id) return null;
+    if (this.mongoDb) return (await this.mongoDb.collection<School>('schools').findOne({ id })) as School | null;
+    return (this.data?.schools || []).find(sc => sc.id === id) ?? null;
+  }
   async getClasses() {
     if (this.mongoDb) return await this.mongoDb.collection<ClassGroup>('classes').find({}).toArray();
     return this.data?.classes || [];
@@ -1685,7 +1690,7 @@ export class DBStore {
     }
     return (this.data?.students || []).find(s => s.id === id) || null;
   }
-  async countStudents(opts?: { schoolId?: string; teacherId?: string; q?: string }) {
+  async countStudents(opts?: { schoolId?: string | string[]; teacherId?: string; q?: string }) {
     // Mirrors getStudents' search semantics so the route's X-Total-Count
     // header reflects the full match count, not the post-pagination
     // page count. The previous version took no `q` and the route fell
@@ -1694,7 +1699,7 @@ export class DBStore {
     const search = (opts?.q || '').trim().toLowerCase();
     if (this.mongoDb) {
       const filter: any = {};
-      if (opts?.schoolId) filter.schoolId = opts.schoolId;
+      if (opts?.schoolId) filter.schoolId = Array.isArray(opts.schoolId) ? { $in: opts.schoolId } : opts.schoolId;
       if (opts?.teacherId) filter.teacherId = opts.teacherId;
       if (search) {
         // Mirror the BSON-range + collation pattern from getStudents
@@ -1723,7 +1728,7 @@ export class DBStore {
       return await this.mongoDb.collection('students').countDocuments(filter);
     }
     let result = this.data?.students || [];
-    if (opts?.schoolId) result = result.filter(s => s.schoolId === opts.schoolId);
+    if (opts?.schoolId) { const ids = ([] as string[]).concat(opts.schoolId); result = result.filter(s => ids.includes(s.schoolId)); }
     if (opts?.teacherId) result = result.filter(s => s.teacherId === opts.teacherId);
     if (search) {
       // Same prefix-only semantics as getStudents' in-memory path.

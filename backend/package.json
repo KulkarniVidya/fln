@@ -41,6 +41,7 @@
     "test:class-level-range": "tsx --test tests/class-level-range.test.ts",
     "test:scan-answer-keys": "tsx --test tests/scan-answer-keys.test.ts",
     "test:answer-key": "tsx --test tests/answer-key.test.ts",
+    "test:admin-student-scope": "tsx --test tests/admin-student-scope.test.ts",
     "test:paper-type-config": "tsx --test tests/paper-type-config.test.ts",
     "test:choice-letter-answers": "tsx --test tests/choice-letter-answers.test.ts",
     "test:worksheet-layout-rules": "tsx --test tests/worksheet-layout-rules.test.ts",
