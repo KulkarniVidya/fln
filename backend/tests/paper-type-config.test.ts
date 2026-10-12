@@ -14,7 +14,7 @@ process.env.JWT_SECRET = 'dev-insecure-secret-change-me';
 const { dbStore } = await import('../src/db');
 const { JWT_SECRET } = await import('../src/auth');
 const { registerWorksheetRoutes } = await import('../src/routes/worksheets');
-const { PAPER_TYPE_CONFIG, getPaperTypeConfig } = await import('../src/config/paperTypeConfig');
+const { PAPER_TYPE_CONFIG, getPaperTypeConfig, spreadQuestionCount } = await import('../src/config/paperTypeConfig');
 await dbStore.init();
 
 const express = (await import('express')).default;
@@ -33,12 +33,12 @@ const teacher = (await dbStore.getUsers()).find(u => u.email === 'gps-mt-001.t01
 assert.ok(teacher, 'seeded teacher exists');
 const auth = { Authorization: `Bearer ${jwtLib.sign({ email: teacher.email }, JWT_SECRET, { expiresIn: '1h' })}` };
 
-test('every paper type has a whole, positive question count and a known level scope', () => {
+test('every paper type has a whole question count in the plan range and fixes no level', () => {
   const types = Object.keys(PAPER_TYPE_CONFIG);
   assert.deepEqual(types.sort(), ['diagnostic', 'endline', 'midline', 'personalized']);
   for (const c of Object.values(PAPER_TYPE_CONFIG)) {
     assert.ok(Number.isInteger(c.questionCount) && c.questionCount >= 8 && c.questionCount <= 10, c.paperType);
-    assert.ok(['class-band', 'current-level'].includes(c.levelScope), c.paperType);
+    assert.equal('levelScope' in c, false, 'no level is fixed by the paper type');
     assert.equal(c.approvedTemplatesOnly, true);
   }
 });
@@ -71,4 +71,20 @@ test('GET /api/paper-types/:type/config returns one type, and 404 for an unknown
 test('both routes refuse a request with no token', async () => {
   assert.equal((await fetch(`${BASE}/api/paper-types/config`)).status, 401);
   assert.equal((await fetch(`${BASE}/api/paper-types/diagnostic/config`)).status, 401);
+});
+
+test('spreadQuestionCount splits evenly, remainder to the first concepts, and always sums to the total', () => {
+  assert.deepEqual(spreadQuestionCount(10, 3), [4, 3, 3]);
+  assert.deepEqual(spreadQuestionCount(10, 2), [5, 5]);
+  assert.deepEqual(spreadQuestionCount(10, 10), Array(10).fill(1));
+  assert.deepEqual(spreadQuestionCount(8, 1), [8]);
+  for (let parts = 1; parts <= 8; parts++) {
+    assert.equal(spreadQuestionCount(8, parts).reduce((a, b) => a + b, 0), 8);
+  }
+});
+
+test('spreadQuestionCount refuses a split that leaves a concept with no question', () => {
+  assert.throws(() => spreadQuestionCount(10, 11), RangeError);
+  assert.throws(() => spreadQuestionCount(10, 0), RangeError);
+  assert.throws(() => spreadQuestionCount(10, 2.5), RangeError);
 });
