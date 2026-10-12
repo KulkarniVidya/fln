@@ -11,9 +11,11 @@
 
 import { dbStore } from '../db';
 import { CURRICULUM_MAPPING } from '../config/curriculumMap';
-import { pickVariant, SvgThemeVariant } from '../svgAssetCatalog';
+import { pickVariant, listThemes, SvgThemeVariant } from '../svgAssetCatalog';
+import { themeSupportsCircling } from '../config/worksheetLayoutRules';
 import {
   RenderedQuestion,
+  answerHint,
   filterEligibleTemplates,
   renderTemplateQuestion,
 } from './questionTemplateRenderer';
@@ -36,6 +38,10 @@ export interface ResolvedQuestion extends RenderedQuestion {
    * picture and the number would not agree.
    */
   svgCount?: number;
+  /** The template's answer type, which decides how much answer space is printed. */
+  answerType?: string | null;
+  /** True when the child circles the picture and its theme supports circling: the sheet then leaves room around each object. */
+  circleAnswer?: boolean;
 }
 
 export type ConceptShortfall = 'unknown-concept' | 'no-eligible-template' | 'fewer-than-requested';
@@ -123,6 +129,10 @@ export async function resolveWorksheetContent(
         templateId: template.id,
         svgVariant: rendered.svgAsset ? pickVariant(rendered.svgAsset, instanceSeed) : undefined,
         svgCount: countedPictures(template.questionFamily, rendered),
+        answerType: template.answerType ?? null,
+        circleAnswer: Boolean(rendered.svgAsset)
+          && answerHint(template.generationIntent) === 'Circle your answer'
+          && themeSupportsCircling(listThemes().find(t => t.id === rendered.svgAsset)?.supportedAnswerShapes),
       });
     }
     concepts.push({
