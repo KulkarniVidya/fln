@@ -20,6 +20,8 @@ import {
 
 export const MAX_CONCEPTS_PER_BATCH = 20;
 export const MAX_QUESTIONS_PER_CONCEPT = 50;
+/** Most copies of one picture printed for a counting question. */
+export const MAX_PRINTED_PICTURES = 20;
 
 export interface ResolvedQuestion extends RenderedQuestion {
   /** `<conceptId>_Q<n>`, numbered within the concept starting at 1. */
@@ -28,6 +30,12 @@ export interface ResolvedQuestion extends RenderedQuestion {
   templateId: string;
   /** The artwork file for `svgAsset` (the theme id), chosen from the seed. */
   svgVariant?: SvgThemeVariant;
+  /**
+   * For a counting question: how many copies of the artwork to print, which is
+   * the answer. The question text only has asterisks, so without this the
+   * picture and the number would not agree.
+   */
+  svgCount?: number;
 }
 
 export type ConceptShortfall = 'unknown-concept' | 'no-eligible-template' | 'fewer-than-requested';
@@ -52,6 +60,12 @@ const KNOWN_CONCEPTS = new Set(Object.values(CURRICULUM_MAPPING).map(c => c.conc
 /** Same inputs, same seed: a stable default so repeated calls agree. */
 function defaultSeed(conceptIds: string[], questionsPerConcept: number): string {
   return `worksheet:${questionsPerConcept}:${conceptIds.join(',')}`;
+}
+
+function countedPictures(family: string, rendered: RenderedQuestion): number | undefined {
+  if (family !== 'counting' || !rendered.svgAsset) return undefined;
+  const n = Number(rendered.answer);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_PRINTED_PICTURES ? n : undefined;
 }
 
 export async function resolveWorksheetContent(
@@ -106,6 +120,7 @@ export async function resolveWorksheetContent(
         conceptId,
         templateId: template.id,
         svgVariant: rendered.svgAsset ? pickVariant(rendered.svgAsset, instanceSeed) : undefined,
+        svgCount: countedPictures(template.questionFamily, rendered),
       });
     }
     concepts.push({

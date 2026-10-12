@@ -520,6 +520,70 @@ export function registerWorksheetRoutes(app: express.Express) {
     }
   });
 
+  // Issue #601: a worksheet for a chosen set of concepts. Content comes from the
+  // concepts' approved templates (resolveWorksheetContent, #600) and is printed
+  // by renderConceptWorksheet (#602). Nothing is saved: the same request gives
+  // the same sheet again.
+  const CONCEPT_BATCH_ROLES = new Set<UserRole>([UserRole.SUPERADMIN, UserRole.SCHOOL, UserRole.TEACHER, UserRole.VOLUNTEER]);
+  const MAX_QUESTIONS_PER_BATCH = 200;
+
+  app.post('/api/worksheets/generate-concept-batch', async (req, res) => {
+    const user = getAuthUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!CONCEPT_BATCH_ROLES.has(user.role)) {
+      return res.status(403).json({ error: 'Only a teacher, volunteer, principal or superadmin can create a concept worksheet.' });
+    }
+
+    const { conceptIds, questionsPerConcept, className, section, seed } = req.body ?? {};
+    const classNameText = typeof className === 'string' ? className.trim() : '';
+    const sectionText = typeof section === 'string' ? section.trim() : '';
+    if (!classNameText || classNameText.length > 40 || !sectionText || sectionText.length > 10) {
+      return res.status(400).json({ error: 'className (up to 40 characters) and section (up to 10 characters) are required.' });
+    }
+    if (seed !== undefined && (typeof seed !== 'string' || seed.length === 0 || seed.length > 60)) {
+      return res.status(400).json({ error: 'seed must be a text of 1 to 60 characters.' });
+    }
+
+    let content;
+    try {
+      const { resolveWorksheetContent } = await import('../services/worksheetContent');
+      const distinct = Array.isArray(conceptIds) ? new Set(conceptIds.map(c => String(c).trim())).size : 0;
+      if (Number.isInteger(questionsPerConcept) && distinct * questionsPerConcept > MAX_QUESTIONS_PER_BATCH) {
+        return res.status(400).json({ error: `A concept worksheet can hold at most ${MAX_QUESTIONS_PER_BATCH} questions.` });
+      }
+      content = await resolveWorksheetContent(conceptIds, questionsPerConcept, seed ? { seed } : {});
+    } catch (err: any) {
+      if (err instanceof RangeError) return res.status(400).json({ error: err.message });
+      console.error('Concept worksheet content failed:', err);
+      return res.status(500).json({ success: false, error: 'Could not prepare the worksheet content.' });
+    }
+
+    const summary = content.concepts.map(c => ({
+      conceptId: c.conceptId, requested: c.requested, produced: c.questions.length, shortfall: c.shortfall ?? null,
+    }));
+    if (content.questions.length === 0) {
+      return res.status(404).json({
+        error: 'None of the chosen concepts has an approved question that can be printed.',
+        concepts: summary,
+      });
+    }
+
+    try {
+      const { renderConceptWorksheet } = await import('../paperGenerator');
+      const result = await renderConceptWorksheet({
+        worksheetId: `CW_${randomUUID().slice(0, 8)}`,
+        className: classNameText,
+        section: sectionText,
+        conceptIds: content.concepts.map(c => c.conceptId),
+        resolvedQuestions: content.questions,
+      });
+      res.json({ success: true, pdfUrl: result.pdfUrl, questionCount: content.questions.length, concepts: summary });
+    } catch (err: any) {
+      console.error('Concept worksheet PDF failed:', err);
+      res.status(500).json({ success: false, error: 'Could not create the worksheet PDF.' });
+    }
+  });
+
   // Generate Personalized Level-Wise Worksheet PDF for a single student.
   // Pipeline: build a 1-entry roster -> Levels_backend /api/generate-batch
   // -> poll /api/batch-status -> fetch /api/download-batch (zip) -> extract

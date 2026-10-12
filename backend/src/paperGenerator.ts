@@ -5,7 +5,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import type { PDFFont } from 'pdf-lib';
 import { randomUUID } from 'crypto';
 import { Question, dbStore } from './db';
-import { isBalvatikaStage } from './config/curriculumMap';
+import { getLevelForConcept, isBalvatikaStage } from './config/curriculumMap';
 import {
   MIN_ANSWER_BOX_HEIGHT_PT,
   MIN_FONT_SIZE_PT,
@@ -17,6 +17,9 @@ import {
 import { renderBatch } from './worksheetRenderer';
 import { mergeAndStamp } from './pdfMerge';
 import { drawQrCode } from './qrCode';
+import { drawSimpleSvg, parseSimpleSvg, ParsedSvg } from './svgPdf';
+import { readVariantSvg } from './svgAssetCatalog';
+import type { ResolvedQuestion } from './services/worksheetContent';
 import JSZip from 'jszip';
 
 // Resolve __dirname in ES Modules
@@ -846,4 +849,182 @@ export async function renderWorksheetPdf({
     filePath,
     pdfUrl: `/output/${fileName}`
   };
+}
+
+// ---------------------------------------------------------------------------
+// Concept worksheets (#602)
+// ---------------------------------------------------------------------------
+
+export interface ConceptWorksheetLayout {
+  fontSizePt?: number;
+  answerBoxHeightPt?: number;
+  maxQuestionsPerPage?: number;
+}
+
+const CONCEPT_SHEET_FIRST_QUESTION_OFFSET = 165;
+const CONCEPT_SHEET_PICTURE_PT = 34;
+const CONCEPT_SHEET_PICTURE_GAP_PT = 6;
+const CONCEPT_SHEET_HEADING_PT = 26;
+
+/**
+ * A counting question's text shows its objects as asterisks ("Count the apples:
+ * * * *. How many..."). On the printed sheet the pictures stand in for them, so
+ * the asterisk run is replaced by a pointer to the pictures.
+ */
+export function pointToPictures(text: string): string {
+  return text.replace(/\s*:?\s*(?:\*\s*)+\./, ' (look at the pictures).');
+}
+
+/** Replace anything the standard PDF font cannot draw, so one odd character never stops the whole sheet. */
+function printableText(allowed: Set<number>, text: string): string {
+  let out = '';
+  for (const ch of text.normalize('NFC')) {
+    const cp = ch.codePointAt(0)!;
+    if (cp === 9 || cp === 10 || cp === 13) out += ' ';
+    else out += allowed.has(cp) ? ch : '?';
+  }
+  return out;
+}
+
+/**
+ * Print questions that were already resolved from templates (see
+ * `resolveWorksheetContent`), as a worksheet for a class.
+ *
+ * Takes finished content and touches no database, so it can be tested with
+ * made-up questions. Every question is printed: the page count follows the
+ * content and nothing is cut (see OVERFLOW_POLICY). The layout rules can ask
+ * for more than the Balvatika minimums but never for less.
+ */
+export async function renderConceptWorksheet({
+  worksheetId,
+  className,
+  section,
+  conceptIds,
+  resolvedQuestions,
+  layoutRules,
+}: {
+  worksheetId: string;
+  className: string;
+  section: string;
+  conceptIds: string[];
+  resolvedQuestions: ResolvedQuestion[];
+  layoutRules?: ConceptWorksheetLayout;
+}): Promise<WorksheetPdfResult> {
+  if (!Array.isArray(resolvedQuestions) || resolvedQuestions.length === 0) {
+    throw new RangeError('A concept worksheet needs at least one question.');
+  }
+  const fontSize = Math.max(layoutRules?.fontSizePt ?? MIN_FONT_SIZE_PT, MIN_FONT_SIZE_PT);
+  const answerBoxHeight = Math.max(layoutRules?.answerBoxHeightPt ?? MIN_ANSWER_BOX_HEIGHT_PT, MIN_ANSWER_BOX_HEIGHT_PT);
+  const perPage = Math.min(Math.max(1, Math.floor(layoutRules?.maxQuestionsPerPage ?? QUESTIONS_PER_PAGE_MAX)), QUESTIONS_PER_PAGE_MAX);
+  const lineHeight = fontSize * 1.3;
+  const maxWidth = PAGE_WIDTH - 100;
+
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const allowed = new Set(font.getCharacterSet());
+  const safe = (text: string) => printableText(allowed, text);
+
+  // Artwork is parsed once per file. A picture that cannot be drawn stops the
+  // sheet with a clear error rather than printing a question with no picture.
+  const artwork = new Map<string, ParsedSvg>();
+  const artFor = (q: ResolvedQuestion): ParsedSvg | undefined => {
+    if (!q.svgVariant) return undefined;
+    const cached = artwork.get(q.svgVariant.file);
+    if (cached) return cached;
+    const markup = readVariantSvg(q.svgVariant);
+    if (!markup) throw new Error(`Artwork file ${q.svgVariant.file} for ${q.questionId} cannot be read.`);
+    try {
+      const parsed = parseSimpleSvg(markup);
+      artwork.set(q.svgVariant.file, parsed);
+      return parsed;
+    } catch (err: any) {
+      throw new Error(`Artwork file ${q.svgVariant.file} for ${q.questionId} cannot be drawn: ${err.message}`);
+    }
+  };
+
+  const picturesPerRow = Math.max(1, Math.floor(maxWidth / (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT)));
+  let previousConcept: string | null = null;
+  const blocks = resolvedQuestions.map((q, index) => {
+    const art = q.svgCount && q.svgCount > 0 ? artFor(q) : undefined;
+    const rawText = art ? pointToPictures(q.question) : q.question;
+    const textLines = wrapTextToWidth(safe(`Q${index + 1}. ${rawText}`), bold, fontSize, maxWidth);
+    const choiceLines = (q.choices ?? []).flatMap((choice, i) =>
+      wrapTextToWidth(safe(`${String.fromCharCode(65 + i)}. ${choice}`), font, fontSize, maxWidth - 20));
+    const pictureRows = art ? Math.ceil(q.svgCount! / picturesPerRow) : 0;
+    const heading = q.conceptId !== previousConcept
+      ? safe(`${q.conceptId}${getLevelForConcept(q.conceptId)?.levelTitle ? ': ' + getLevelForConcept(q.conceptId)!.levelTitle : ''}`)
+      : undefined;
+    previousConcept = q.conceptId;
+    const height = (heading ? CONCEPT_SHEET_HEADING_PT : 0)
+      + textLines.length * lineHeight
+      + (choiceLines.length ? choiceLines.length * lineHeight + 4 : 0)
+      + pictureRows * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT)
+      + answerBoxHeight;
+    return { q, art, textLines, choiceLines, pictureRows, heading, height };
+  });
+
+  const plan = planQuestionPages(blocks.map(b => b.height), {
+    maxPerPage: perPage,
+    availableHeight: PAGE_HEIGHT - CONCEPT_SHEET_FIRST_QUESTION_OFFSET - PAGE_BOTTOM_MARGIN_PT,
+    gap: QUESTION_GAP_PT,
+  });
+  const totalPages = plan.length;
+  const today = new Date().toISOString().slice(0, 10);
+  const conceptList = safe([...new Set(conceptIds)].join(', '));
+
+  plan.forEach((indexes, pageIndex) => {
+    const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    const { height } = page.getSize();
+    page.drawRectangle({ x: 0, y: height - 14, width: PAGE_WIDTH, height: 14, color: rgb(0.06, 0.5, 0.35) });
+    page.drawText('FLN CONCEPT WORKSHEET', { x: 50, y: height - 48, size: 16, font: bold, color: rgb(0.06, 0.5, 0.35) });
+    page.drawText(safe(`Class: ${className}  |  Section: ${section}  |  Date: ${today}`), { x: 50, y: height - 68, size: 10, font, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(safe(`Concepts: ${conceptList}`).slice(0, 110), { x: 50, y: height - 83, size: 9, font, color: rgb(0.45, 0.45, 0.45) });
+    page.drawText('Name: ______________________________', { x: 50, y: height - 112, size: 12, font, color: rgb(0.15, 0.15, 0.15) });
+
+    let y = height - CONCEPT_SHEET_FIRST_QUESTION_OFFSET;
+    for (const i of indexes) {
+      const b = blocks[i];
+      if (b.heading) {
+        page.drawText(b.heading, { x: 50, y: y - 12, size: 11, font: bold, color: rgb(0.06, 0.5, 0.35) });
+        y -= CONCEPT_SHEET_HEADING_PT;
+      }
+      b.textLines.forEach((line, k) => {
+        page.drawText(line, { x: 50, y: y - fontSize - k * lineHeight, size: fontSize, font: bold, color: rgb(0.15, 0.15, 0.15) });
+      });
+      y -= b.textLines.length * lineHeight;
+      if (b.choiceLines.length) {
+        b.choiceLines.forEach((line, k) => {
+          page.drawText(line, { x: 70, y: y - fontSize - k * lineHeight, size: fontSize, font, color: rgb(0.2, 0.2, 0.2) });
+        });
+        y -= b.choiceLines.length * lineHeight + 4;
+      }
+      if (b.art) {
+        for (let c = 0; c < b.q.svgCount!; c++) {
+          const row = Math.floor(c / picturesPerRow);
+          const col = c % picturesPerRow;
+          drawSimpleSvg(
+            page, b.art,
+            50 + col * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT),
+            y - row * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT),
+            CONCEPT_SHEET_PICTURE_PT,
+          );
+        }
+        y -= b.pictureRows * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT);
+      }
+      page.drawRectangle({
+        x: 50, y: y - answerBoxHeight, width: 150, height: answerBoxHeight,
+        color: rgb(1, 1, 1), borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+      });
+      y -= answerBoxHeight + QUESTION_GAP_PT;
+    }
+    page.drawText(safe(`Worksheet ID: ${worksheetId} - Page ${pageIndex + 1} of ${totalPages}`), {
+      x: 50, y: 40, size: 7.5, font, color: rgb(0.6, 0.6, 0.6),
+    });
+  });
+
+  const fileName = `concept_worksheet_${worksheetId}_${randomUUID()}.pdf`;
+  const filePath = path.join(OUTPUT_DIR, fileName);
+  fs.writeFileSync(filePath, Buffer.from(await doc.save()));
+  return { fileName, filePath, pdfUrl: `/output/${fileName}` };
 }
