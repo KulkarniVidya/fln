@@ -24,11 +24,68 @@ export function describeAnswerKey(key: { masterJson?: any; questions?: any[]; an
 export function answerKeyProblem(c: AnswerKeyCounts): string | null {
   if (c.questions === 0) return 'The stored key has no questions.';
   if (c.answerKey === 0) return 'The stored key has no answers.';
-  if (c.answerRegions > 0 && c.answerKey !== c.answerRegions) {
-    return `answerKey (${c.answerKey}) and answerRegions (${c.answerRegions}) differ.`;
+  // Fewer regions than answers is the known "unmapped question" case (a
+  // matching line or an ordering has no single box; paperGenerator logs it).
+  // More regions than answers means the two lists came from different papers.
+  if (c.answerRegions > c.answerKey) {
+    return `answerRegions (${c.answerRegions}) are more than answerKey (${c.answerKey}).`;
   }
   if (c.printedFields > 0 && c.answerKey < c.printedFields) {
     return `The paper has ${c.printedFields} answer fields but the key has ${c.answerKey}.`;
   }
   return null;
+}
+
+/**
+ * The answer-key object inside a rendered sheet's `masterJson`. Class 1 and 2
+ * keep `sections` at the top (Class 1 a `questions` object); Class 3 wraps one set as `sets[0]` (still with
+ * `sections`); Class 4 wraps `sets[0]` with a flat `questions` list. Reading
+ * only `sections` made a Class 4 sheet look empty and the generator then
+ * stored a one-question stub (FLN #762).
+ */
+export function keyRootOf(masterJson: any): any | null {
+  if (!masterJson || typeof masterJson !== 'object') return null;
+  if (Array.isArray(masterJson.sections) || (masterJson.questions && typeof masterJson.questions === 'object')) return masterJson;
+  const first = Array.isArray(masterJson.sets) ? masterJson.sets[0] : null;
+  return first && typeof first === 'object' ? first : null;
+}
+
+export interface FlatKeyQuestion {
+  question_id: string;
+  question: string;
+  answer: string;
+  topic: string;
+}
+
+const answerText = (a: any): string =>
+  Array.isArray(a) || (a && typeof a === 'object') ? JSON.stringify(a) : String(a ?? '');
+
+/**
+ * Questions of a key whose `questions` is either a flat list (Class 4, one
+ * entry per answer field) or an object keyed by question id (Class 1, whose
+ * answers can be structured, for example a matching, and are kept as JSON).
+ */
+export function flatKeyQuestions(root: any): FlatKeyQuestion[] {
+  if (!root || !root.questions || typeof root.questions !== 'object') return [];
+  if (!Array.isArray(root.questions)) {
+    return Object.entries(root.questions).map(([id, q]: [string, any]) => ({
+      question_id: id,
+      question: String(q?.question ?? id),
+      answer: answerText(q?.expected_answer ?? q?.icr?.expected ?? ''),
+      topic: String(q?.type ?? 'Unclassified'),
+    }));
+  }
+  const out: FlatKeyQuestion[] = [];
+  for (const q of root.questions) {
+    const id = String(q?.qid ?? q?.question_id ?? '').trim();
+    if (!id) continue;
+    const answer = q.correct_answer ?? q.icr?.evaluation?.expected ?? '';
+    out.push({
+      question_id: id,
+      question: String(q.label ?? q.section ?? id),
+      answer: answerText(answer),
+      topic: String(q.section ?? 'Unclassified'),
+    });
+  }
+  return out;
 }
