@@ -1264,7 +1264,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     const reps = await dbStore.getEvaluationReports({ studentIds: [req.params.studentId] });
     // Sort newest first so the UI's "most recent placement" view shows
@@ -1283,7 +1283,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     const reps = await dbStore.getEvaluationReports({ studentIds: [req.params.studentId] });
     const diagnosticReports = reps.filter(r => r.worksheetId === 'diagnostic');
@@ -1308,7 +1308,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(report.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     if (!report.questionResults || report.questionResults.length === 0) {
       return res.status(400).json({
