@@ -42,6 +42,10 @@ before(async () => {
     id: 'tpl_fixed', paramMode: 'legacy-free-text', stem: 'Count the apples in the basket.', answerSpec: '5',
     generationIntent: '', svgThemeIds: [],
   }));
+  await dbStore.addQuestionTemplate(template('S3.6', { id: 'tpl_trace', answerType: 'trace' }));
+  await dbStore.addQuestionTemplate(template('S3.8', {
+    id: 'tpl_circle', answerType: 'mcq-4', generationIntent: 'The child looks at the pictures and circles the group with more objects.',
+  }));
   // Only an observation template: nothing printable.
   await dbStore.addQuestionTemplate(template('S3.7', { id: 'tpl_only_observed', assessmentMode: 'observed' }));
 });
@@ -54,6 +58,24 @@ test('gives exactly the number asked for, numbered within the concept', async ()
     assert.equal(out.concepts[0].shortfall, undefined);
     assert.ok(out.questions.every(q => q.conceptId === 'S3.4' && q.question.length > 0 && q.answer.length > 0));
   }
+});
+
+test('each question carries its template\'s answer type, which sizes its answer space', async () => {
+  const out = await resolveWorksheetContent(['S3.6', 'S3.4'], 2, { seed: 'at' });
+  assert.deepEqual(out.concepts[0].questions.map(q => q.answerType), ['trace', 'trace']);
+  assert.deepEqual(out.concepts[1].questions.map(q => q.answerType), [null, null]);
+});
+
+test('room for circling is requested only when the theme lists "circle" among its answer shapes', async () => {
+  const circlers = listThemes().filter(t => t.supportedAnswerShapes.includes('circle'));
+  const out = await resolveWorksheetContent(['S3.8'], 3, { seed: 'c' });
+  assert.ok(out.questions.length > 0);
+  // The intent says "circles"; whether room is kept is decided by the theme, not the intent.
+  for (const q of out.questions) {
+    const theme = listThemes().find(t => t.id === q.svgAsset);
+    assert.equal(q.circleAnswer, Boolean(theme?.supportedAnswerShapes.includes('circle')));
+  }
+  if (circlers.length === 0) assert.ok(out.questions.every(q => q.circleAnswer === false));
 });
 
 test('the same inputs always give the same questions and artwork; another seed gives different ones', async () => {

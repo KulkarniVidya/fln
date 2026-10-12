@@ -17,6 +17,8 @@ const { dbStore } = await import('../src/db');
 const { JWT_SECRET } = await import('../src/auth');
 const { pointToPictures, renderConceptWorksheet } = await import('../src/paperGenerator');
 const { listThemes } = await import('../src/svgAssetCatalog');
+const { ANSWER_SPACE_RULES, answerSpaceFor, themeSupportsCircling, MIN_ANSWER_BOX_HEIGHT_PT } = await import('../src/config/worksheetLayoutRules');
+const { ANSWER_TYPES } = await import('../src/types/questionTemplateParams');
 const { registerWorksheetRoutes } = await import('../src/routes/worksheets');
 const express = (await import('express')).default;
 const jwtLib = (await import('jsonwebtoken')).default;
@@ -83,6 +85,56 @@ test('the asterisks of a counting question are replaced by a pointer to the pict
     'Count the apples (look at the pictures). How many apples are there?');
   assert.equal(pointToPictures('Count the cats: *. How many cats are there?'), 'Count the cats (look at the pictures). How many cats are there?');
   assert.equal(pointToPictures('Which number is more: 10 or 3?'), 'Which number is more: 10 or 3?', 'text with no asterisks is left alone');
+});
+
+// ---- answer space per answer type (#590) -----------------------------------------------------
+test('every answer type has a rule, and a drawn box is never below the minimum', () => {
+  assert.deepEqual(Object.keys(ANSWER_SPACE_RULES).sort(), [...ANSWER_TYPES].sort());
+  for (const [type, rule] of Object.entries(ANSWER_SPACE_RULES) as [string, any][]) {
+    if (rule.style !== 'none') assert.ok(rule.heightPt >= MIN_ANSWER_BOX_HEIGHT_PT, type);
+    assert.ok(rule.heightPt > 0, type);
+  }
+});
+
+test('answer types get visibly different space, and an unknown or missing type gets the default', () => {
+  const h = (t: string) => answerSpaceFor(t).heightPt;
+  assert.ok(h('trace') > h('matching') && h('matching') > h('single-number'), 'trace > matching > single-number');
+  assert.equal(answerSpaceFor('mcq-4').style, 'none');
+  assert.equal(answerSpaceFor('fill-blanks').style, 'line');
+  assert.equal(answerSpaceFor('true-false').style, 'true-false');
+  for (const odd of [null, undefined, '', 'constructor', '__proto__', 'nonsense']) {
+    assert.deepEqual(answerSpaceFor(odd as any), ANSWER_SPACE_RULES['single-number'], String(odd));
+  }
+});
+
+test('a sheet of trace questions needs more pages than the same sheet of number questions', async () => {
+  const many = (answerType: string) => Array.from({ length: 8 }, (_, i) => question(i + 1, { answerType }));
+  const numbers = await sheet(many('single-number')); keep(numbers.filePath);
+  const traces = await sheet(many('trace')); keep(traces.filePath);
+  assert.equal(await pagesOf(numbers.filePath), 2);
+  assert.ok(await pagesOf(traces.filePath) > 2, 'trace space is larger, so fewer questions fit a page');
+});
+
+test('every answer type prints without error', async () => {
+  for (const type of [...ANSWER_TYPES, null]) {
+    const r = await sheet([question(1, { answerType: type }), question(2, { answerType: type })]); keep(r.filePath);
+    assert.ok(await pagesOf(r.filePath) >= 1, String(type));
+  }
+});
+
+test('the circling room is read from the theme, not assumed', () => {
+  assert.equal(themeSupportsCircling(['single-number', 'circle']), true);
+  assert.equal(themeSupportsCircling(['single-number', 'mcq-4']), false);
+  assert.equal(themeSupportsCircling([]), false);
+  assert.equal(themeSupportsCircling(undefined), false);
+});
+
+test('pictures the child circles are spaced further apart, which can take more pages', async () => {
+  const withPictures = (circleAnswer: boolean) => Array.from({ length: 8 }, (_, i) =>
+    question(i + 1, { svgAsset: 'fruits', svgVariant: variant, svgCount: 20, circleAnswer }));
+  const plain = await sheet(withPictures(false)); keep(plain.filePath);
+  const circled = await sheet(withPictures(true)); keep(circled.filePath);
+  assert.ok(await pagesOf(circled.filePath) > await pagesOf(plain.filePath));
 });
 
 test('no questions is refused', async () => {

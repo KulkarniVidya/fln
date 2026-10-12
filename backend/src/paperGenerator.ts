@@ -13,6 +13,8 @@ import {
   QUESTIONS_PER_PAGE_MAX,
   QUESTION_GAP_PT,
   planQuestionPages,
+  answerSpaceFor,
+  CIRCLE_PADDING_PT,
 } from './config/worksheetLayoutRules';
 import { renderBatch } from './worksheetRenderer';
 import { keyRootOf, flatKeyQuestions } from './answerKeyCheck';
@@ -944,7 +946,6 @@ export async function renderConceptWorksheet({
     throw new RangeError('A concept worksheet needs at least one question.');
   }
   const fontSize = Math.max(layoutRules?.fontSizePt ?? MIN_FONT_SIZE_PT, MIN_FONT_SIZE_PT);
-  const answerBoxHeight = Math.max(layoutRules?.answerBoxHeightPt ?? MIN_ANSWER_BOX_HEIGHT_PT, MIN_ANSWER_BOX_HEIGHT_PT);
   const perPage = Math.min(Math.max(1, Math.floor(layoutRules?.maxQuestionsPerPage ?? QUESTIONS_PER_PAGE_MAX)), QUESTIONS_PER_PAGE_MAX);
   const lineHeight = fontSize * 1.3;
   const maxWidth = PAGE_WIDTH - 100;
@@ -973,7 +974,6 @@ export async function renderConceptWorksheet({
     }
   };
 
-  const picturesPerRow = Math.max(1, Math.floor(maxWidth / (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT)));
   let previousConcept: string | null = null;
   const blocks = resolvedQuestions.map((q, index) => {
     const art = q.svgCount && q.svgCount > 0 ? artFor(q) : undefined;
@@ -981,7 +981,16 @@ export async function renderConceptWorksheet({
     const textLines = wrapTextToWidth(safe(`Q${index + 1}. ${rawText}`), bold, fontSize, maxWidth);
     const choiceLines = (q.choices ?? []).flatMap((choice, i) =>
       wrapTextToWidth(safe(`${String.fromCharCode(65 + i)}. ${choice}`), font, fontSize, maxWidth - 20));
+    // Pictures the child circles get room on every side (#590).
+    const pictureCell = CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT + (q.circleAnswer ? 2 * CIRCLE_PADDING_PT : 0);
+    const picturesPerRow = Math.max(1, Math.floor(maxWidth / pictureCell));
     const pictureRows = art ? Math.ceil(q.svgCount! / picturesPerRow) : 0;
+    // How much answer space this answer type gets. A drawn box is never below
+    // the minimum, and a caller may ask for a taller one.
+    const rule = answerSpaceFor(q.answerType);
+    const answerHeight = rule.style === 'none'
+      ? rule.heightPt
+      : Math.max(rule.heightPt, MIN_ANSWER_BOX_HEIGHT_PT, layoutRules?.answerBoxHeightPt ?? 0);
     const heading = q.conceptId !== previousConcept
       ? safe(`${q.conceptId}${getLevelForConcept(q.conceptId)?.levelTitle ? ': ' + getLevelForConcept(q.conceptId)!.levelTitle : ''}`)
       : undefined;
@@ -989,9 +998,9 @@ export async function renderConceptWorksheet({
     const height = (heading ? CONCEPT_SHEET_HEADING_PT : 0)
       + textLines.length * lineHeight
       + (choiceLines.length ? choiceLines.length * lineHeight + 4 : 0)
-      + pictureRows * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT)
-      + answerBoxHeight;
-    return { q, art, textLines, choiceLines, pictureRows, heading, height };
+      + pictureRows * pictureCell
+      + answerHeight;
+    return { q, art, textLines, choiceLines, pictureRows, pictureCell, picturesPerRow, rule, answerHeight, heading, height };
   });
 
   const plan = planQuestionPages(blocks.map(b => b.height), {
@@ -1031,22 +1040,35 @@ export async function renderConceptWorksheet({
       }
       if (b.art) {
         for (let c = 0; c < b.q.svgCount!; c++) {
-          const row = Math.floor(c / picturesPerRow);
-          const col = c % picturesPerRow;
+          const row = Math.floor(c / b.picturesPerRow);
+          const col = c % b.picturesPerRow;
+          const pad = b.q.circleAnswer ? CIRCLE_PADDING_PT : 0;
           drawSimpleSvg(
             page, b.art,
-            50 + col * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT),
-            y - row * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT),
+            50 + pad + col * b.pictureCell,
+            y - pad - row * b.pictureCell,
             CONCEPT_SHEET_PICTURE_PT,
           );
         }
-        y -= b.pictureRows * (CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT);
+        y -= b.pictureRows * b.pictureCell;
       }
-      page.drawRectangle({
-        x: 50, y: y - answerBoxHeight, width: 150, height: answerBoxHeight,
-        color: rgb(1, 1, 1), borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
-      });
-      y -= answerBoxHeight + QUESTION_GAP_PT;
+      const grey = rgb(0.8, 0.8, 0.8);
+      if (b.rule.style === 'box') {
+        page.drawRectangle({
+          x: 50, y: y - b.answerHeight, width: b.rule.widthPt, height: b.answerHeight,
+          color: rgb(1, 1, 1), borderColor: grey, borderWidth: 1,
+          ...(b.rule.dashed ? { borderDashArray: [4, 3] } : {}),
+        });
+      } else if (b.rule.style === 'line') {
+        page.drawLine({ start: { x: 50, y: y - b.answerHeight + 6 }, end: { x: 50 + b.rule.widthPt, y: y - b.answerHeight + 6 }, thickness: 1, color: grey });
+      } else if (b.rule.style === 'true-false') {
+        ['True', 'False'].forEach((label, k) => {
+          const x = 50 + k * (b.rule.widthPt / 2);
+          page.drawRectangle({ x, y: y - b.answerHeight, width: b.rule.widthPt / 2 - 10, height: b.answerHeight, borderColor: grey, borderWidth: 1, color: rgb(1, 1, 1) });
+          page.drawText(label, { x: x + 8, y: y - b.answerHeight / 2 - 4, size: 11, font, color: rgb(0.45, 0.45, 0.45) });
+        });
+      }
+      y -= b.answerHeight + QUESTION_GAP_PT;
     }
     page.drawText(safe(`Worksheet ID: ${worksheetId} - Page ${pageIndex + 1} of ${totalPages}`), {
       x: 50, y: 40, size: 7.5, font, color: rgb(0.6, 0.6, 0.6),
