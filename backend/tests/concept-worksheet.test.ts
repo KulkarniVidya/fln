@@ -116,6 +116,7 @@ before(async () => {
   await dbStore.init();
   await dbStore.addQuestionTemplate(tpl('t_cmp', 'S3.4', 'comparison'));
   await dbStore.addQuestionTemplate(tpl('t_cnt', 'S3.1', 'counting'));
+  await dbStore.addQuestionTemplate(tpl('t_cmp2', 'S3.5', 'comparison'));
   await dbStore.addQuestionTemplate(tpl('t_obs', 'S3.7', 'comparison', { assessmentMode: 'observed' }));
   const app = express(); app.use(express.json()); registerWorksheetRoutes(app);
   server = app.listen(0, '127.0.0.1');
@@ -125,6 +126,41 @@ before(async () => {
 after(async () => {
   await new Promise<void>(r => server.close(() => r()));
   for (const f of created) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
+});
+
+test('route with a paperType: the paper holds exactly the fixed count, spread over the concepts, each with its level', async () => {
+  const r = await post({ conceptIds: ['S3.4', 'S3.1'], paperType: 'diagnostic', questionsPerConcept: 1, className: 'Balvatika', section: 'A' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.paperType, 'diagnostic');
+  assert.equal(r.json.expectedQuestionCount, 10);
+  assert.equal(r.json.questionCount, 10, 'the caller\'s questionsPerConcept is ignored');
+  assert.equal(r.json.complete, true);
+  assert.deepEqual(r.json.concepts.map((c: any) => [c.conceptId, c.requested, c.produced]), [['S3.4', 5, 5], ['S3.1', 5, 5]]);
+  for (const c of r.json.concepts) assert.ok(Number.isInteger(c.level) && c.level > 0, `level of ${c.conceptId}`);
+});
+
+test('route with a paperType: an uneven split gives the first concepts the extra questions', async () => {
+  const r = await post({ conceptIds: ['S3.4', 'S3.1', 'S3.5'], paperType: 'diagnostic', className: 'Balvatika', section: 'A' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(r.json.concepts.map((c: any) => [c.conceptId, c.requested, c.produced]), [['S3.4', 4, 4], ['S3.1', 3, 3], ['S3.5', 3, 3]]);
+  assert.equal(r.json.questionCount, 10);
+});
+
+test('route with a paperType: a concept with nothing to print makes the paper incomplete, and it says so', async () => {
+  const r = await post({ conceptIds: ['S3.4', 'S3.7'], paperType: 'personalized', className: 'Balvatika', section: 'A' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.expectedQuestionCount, 8);
+  assert.equal(r.json.questionCount, 4);
+  assert.equal(r.json.complete, false);
+});
+
+test('route with a paperType: an unknown type, no concepts, or more concepts than questions is refused', async () => {
+  assert.equal((await post({ ...good, paperType: 'practice' })).status, 400);
+  assert.equal((await post({ ...good, paperType: 'constructor' })).status, 400);
+  assert.equal((await post({ ...good, paperType: 7 })).status, 400);
+  assert.equal((await post({ ...good, conceptIds: [], paperType: 'diagnostic' })).status, 400);
+  const many = Array.from({ length: 11 }, (_, i) => `S3.${i + 1}`);
+  assert.equal((await post({ ...good, conceptIds: many, paperType: 'diagnostic' })).status, 400);
 });
 
 test('route: a teacher gets a PDF, and the counts add up', async () => {

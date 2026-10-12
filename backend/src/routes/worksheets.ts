@@ -7,7 +7,8 @@ import { getAuthUser } from '../auth';
 import { generateQuestionsForLevel } from '../levelGenerator';
 import * as levelsBackendClient from '../levelsBackendClient';
 import { ROOT_DIR } from '../config';
-import { PAPER_TYPE_CONFIG, getPaperTypeConfig } from '../config/paperTypeConfig';
+import { getLevelForConcept } from '../config/curriculumMap';
+import { PAPER_TYPE_CONFIG, getPaperTypeConfig, spreadQuestionCount } from '../config/paperTypeConfig';
 import { recordStudentCycleLock } from '../paperLock';
 import {
   getGenerationWindowStatus,
@@ -549,7 +550,25 @@ export function registerWorksheetRoutes(app: express.Express) {
       return res.status(403).json({ error: 'Only a teacher, volunteer, principal or superadmin can create a concept worksheet.' });
     }
 
-    const { conceptIds, questionsPerConcept, className, section, seed } = req.body ?? {};
+    const { conceptIds, className, section, seed, paperType } = req.body ?? {};
+    let questionsPerConcept = req.body?.questionsPerConcept;
+    // A paper type fixes the total number of questions (#593); the route
+    // spreads it over the chosen concepts, so the caller need not send a count.
+    let paperTypeConfig: ReturnType<typeof getPaperTypeConfig>;
+    let countsByConcept: Record<string, number> | undefined;
+    if (paperType !== undefined) {
+      paperTypeConfig = typeof paperType === 'string' ? getPaperTypeConfig(paperType) : undefined;
+      if (!paperTypeConfig) {
+        return res.status(400).json({ error: `Unknown paperType. Use one of: ${Object.keys(PAPER_TYPE_CONFIG).join(', ')}.` });
+      }
+      const ids = Array.isArray(conceptIds) ? [...new Set(conceptIds.map((c: unknown) => String(c).trim()))] : [];
+      if (ids.length === 0 || ids.length > paperTypeConfig.questionCount) {
+        return res.status(400).json({ error: `A ${paperTypeConfig.paperType} paper needs between 1 and ${paperTypeConfig.questionCount} different concepts.` });
+      }
+      const counts = spreadQuestionCount(paperTypeConfig.questionCount, ids.length);
+      countsByConcept = Object.fromEntries(ids.map((id, i) => [id, counts[i]]));
+      questionsPerConcept = Math.max(...counts);
+    }
     const classNameText = typeof className === 'string' ? className.trim() : '';
     const sectionText = typeof section === 'string' ? section.trim() : '';
     if (!classNameText || classNameText.length > 40 || !sectionText || sectionText.length > 10) {
@@ -563,10 +582,10 @@ export function registerWorksheetRoutes(app: express.Express) {
     try {
       const { resolveWorksheetContent } = await import('../services/worksheetContent');
       const distinct = Array.isArray(conceptIds) ? new Set(conceptIds.map(c => String(c).trim())).size : 0;
-      if (Number.isInteger(questionsPerConcept) && distinct * questionsPerConcept > MAX_QUESTIONS_PER_BATCH) {
+      if (!paperTypeConfig && Number.isInteger(questionsPerConcept) && distinct * questionsPerConcept > MAX_QUESTIONS_PER_BATCH) {
         return res.status(400).json({ error: `A concept worksheet can hold at most ${MAX_QUESTIONS_PER_BATCH} questions.` });
       }
-      content = await resolveWorksheetContent(conceptIds, questionsPerConcept, seed ? { seed } : {});
+      content = await resolveWorksheetContent(conceptIds, questionsPerConcept, { ...(seed ? { seed } : {}), ...(countsByConcept ? { countsByConcept } : {}) });
     } catch (err: any) {
       if (err instanceof RangeError) return res.status(400).json({ error: err.message });
       console.error('Concept worksheet content failed:', err);
@@ -574,7 +593,8 @@ export function registerWorksheetRoutes(app: express.Express) {
     }
 
     const summary = content.concepts.map(c => ({
-      conceptId: c.conceptId, requested: c.requested, produced: c.questions.length, shortfall: c.shortfall ?? null,
+      conceptId: c.conceptId, level: getLevelForConcept(c.conceptId)?.levelNumber ?? null,
+      requested: c.requested, produced: c.questions.length, shortfall: c.shortfall ?? null,
     }));
     if (content.questions.length === 0) {
       return res.status(404).json({
@@ -592,7 +612,14 @@ export function registerWorksheetRoutes(app: express.Express) {
         conceptIds: content.concepts.map(c => c.conceptId),
         resolvedQuestions: content.questions,
       });
-      res.json({ success: true, pdfUrl: result.pdfUrl, questionCount: content.questions.length, concepts: summary });
+      res.json({
+        success: true, pdfUrl: result.pdfUrl, questionCount: content.questions.length, concepts: summary,
+        ...(paperTypeConfig ? {
+          paperType: paperTypeConfig.paperType,
+          expectedQuestionCount: paperTypeConfig.questionCount,
+          complete: content.questions.length === paperTypeConfig.questionCount,
+        } : {}),
+      });
     } catch (err: any) {
       console.error('Concept worksheet PDF failed:', err);
       res.status(500).json({ success: false, error: 'Could not create the worksheet PDF.' });

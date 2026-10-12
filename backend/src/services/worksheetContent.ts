@@ -71,7 +71,7 @@ function countedPictures(family: string, rendered: RenderedQuestion): number | u
 export async function resolveWorksheetContent(
   conceptIds: string[],
   questionsPerConcept: number,
-  opts: { seed?: string } = {},
+  opts: { seed?: string; countsByConcept?: Record<string, number> } = {},
 ): Promise<ResolvedWorksheetContent> {
   if (!Array.isArray(conceptIds) || conceptIds.length === 0) {
     throw new RangeError('conceptIds must be a non-empty list.');
@@ -90,13 +90,15 @@ export async function resolveWorksheetContent(
 
   const concepts: ResolvedConcept[] = [];
   for (const conceptId of distinct) {
+    // A paper type fixes the total, so its concepts can need different counts.
+    const want = opts.countsByConcept?.[conceptId] ?? questionsPerConcept;
     if (!KNOWN_CONCEPTS.has(conceptId)) {
-      concepts.push({ conceptId, requested: questionsPerConcept, questions: [], shortfall: 'unknown-concept' });
+      concepts.push({ conceptId, requested: want, questions: [], shortfall: 'unknown-concept' });
       continue;
     }
     const eligible = filterEligibleTemplates(await dbStore.getQuestionTemplatesByConcept(conceptId));
     if (eligible.length === 0) {
-      concepts.push({ conceptId, requested: questionsPerConcept, questions: [], shortfall: 'no-eligible-template' });
+      concepts.push({ conceptId, requested: want, questions: [], shortfall: 'no-eligible-template' });
       continue;
     }
 
@@ -105,8 +107,8 @@ export async function resolveWorksheetContent(
     // A template can make many different questions, but not without limit
     // (a "which is more, 4 or 7" template has few distinct instances), so
     // repeats are skipped and the search stops after a bounded number of tries.
-    const maxTries = questionsPerConcept * 6;
-    for (let i = 0; i < maxTries && questions.length < questionsPerConcept; i++) {
+    const maxTries = want * 6;
+    for (let i = 0; i < maxTries && questions.length < want; i++) {
       const template = eligible[i % eligible.length];
       const instanceSeed = `${seed}:${conceptId}:${i}`;
       const rendered = renderTemplateQuestion(template, instanceSeed);
@@ -125,9 +127,9 @@ export async function resolveWorksheetContent(
     }
     concepts.push({
       conceptId,
-      requested: questionsPerConcept,
+      requested: want,
       questions,
-      shortfall: questions.length < questionsPerConcept ? 'fewer-than-requested' : undefined,
+      shortfall: questions.length < want ? 'fewer-than-requested' : undefined,
     });
   }
   return { concepts, questions: concepts.flatMap(c => c.questions) };
