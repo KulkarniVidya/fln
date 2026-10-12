@@ -1,6 +1,6 @@
 import express from 'express';
 import { dbStore, UserRole, Student, Question, AnswerSubmission, EvaluationReport, EvaluationReasoning, CYCLE_NAMES } from '../db';
-import { answersMatch } from '../answerMatching';
+import { answersMatch, matchesChoiceLetter } from '../answerMatching';
 import { getAuthUser, canAccessStudent } from '../auth';
 import { generateDiagnosticPaper } from '../paperGenerator';
 import { generateQuestionsForLevel } from '../levelGenerator';
@@ -862,7 +862,7 @@ export function registerStudentRoutes(app: express.Express) {
         // handwriting, and "07" vs "7" is notation rather than a wrong
         // answer. Getting this wrong does not just lose a mark, it lowers
         // the child's placement. See backend/src/answerMatching.ts.
-        isCorrect: answersMatch(answers[q.question_id], q.answer),
+        isCorrect: answersMatch(answers[q.question_id], q.answer) || matchesChoiceLetter(answers[q.question_id], q),
         sourceLevel: Number.isFinite(srcLevel) ? srcLevel : NaN,
       };
     });
