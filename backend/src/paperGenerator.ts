@@ -15,6 +15,7 @@ import {
   planQuestionPages,
 } from './config/worksheetLayoutRules';
 import { renderBatch } from './worksheetRenderer';
+import { keyRootOf, flatKeyQuestions } from './answerKeyCheck';
 import { mergeAndStamp } from './pdfMerge';
 import { drawQrCode } from './qrCode';
 import { drawSimpleSvg, parseSimpleSvg, ParsedSvg } from './svgPdf';
@@ -233,8 +234,21 @@ export async function generateDiagnosticPaper({
   if (classNumber === 2 && students[0] && (students[0].studentId || (students[0] as any).id)) {
     const sId = students[0].studentId || (students[0] as any).id;
     questions = await dbStore.getStudentAssignedQuestions(sId, 2);
-  } else if (results && results[0] && results[0].masterJson && results[0].masterJson.sections) {
-    const sections = results[0].masterJson.sections;
+  } else if (results && results[0] && keyRootOf(results[0].masterJson)) {
+    const root = keyRootOf(results[0].masterJson);
+    flatKeyQuestions(root).forEach(fq => {
+      questions.push({
+        question_id: fq.question_id,
+        question: fq.question,
+        answer: fq.answer,
+        answer_type: 'number',
+        topic: fq.topic,
+        subtopic: fq.topic,
+        difficulty: 'medium',
+        source_level: classNumber * 10
+      });
+    });
+    const sections: any[] = Array.isArray(root.sections) ? root.sections : [];
     sections.forEach((sec: any, secIdx: number) => {
       if (Array.isArray(sec.items)) {
         sec.items.forEach((item: any, itemIdx: number) => {
@@ -377,8 +391,24 @@ export async function generateDiagnosticPaper({
       });
     };
 
-    if (r.masterJson && Array.isArray(r.masterJson.sections)) {
-      r.masterJson.sections.forEach((sec: any, secIdx: number) => {
+    const keyRoot = keyRootOf(r.masterJson);
+    // Class 4 style key: one flat entry per answer field, keyed by its own id.
+    flatKeyQuestions(keyRoot).forEach(fq => {
+      studentQuestions.push({
+        question_id: fq.question_id,
+        question: fq.question,
+        answer: fq.answer,
+        answer_type: 'number',
+        topic: fq.topic,
+        subtopic: fq.topic,
+        difficulty: 'medium',
+        source_level: classNumber * 10
+      });
+      flatAnswerKey.push({ qid: fq.question_id, question_id: fq.question_id, answer: fq.answer, type: 'graded' });
+    });
+
+    if (keyRoot && Array.isArray(keyRoot.sections)) {
+      keyRoot.sections.forEach((sec: any, secIdx: number) => {
         if (Array.isArray(sec.items)) {
           sec.items.forEach((item: any, itemIdx: number) => {
             // Resolve the answer from multiple possible locations:
