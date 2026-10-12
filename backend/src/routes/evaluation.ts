@@ -16,6 +16,7 @@ import { directPrerequisites, describeConcept } from '../competencyPrerequisites
 import { analyzeScanQuality } from '../scanQuality';
 import { calculateStandardAdvancement } from '../gradeLevelCalculator';
 import { computeRootCauseAnalysis } from '../rootCauseAnalysis';
+import { matchesChoiceLetter } from '../answerMatching';
 
 export function registerEvaluationRoutes(app: express.Express) {
 
@@ -1075,7 +1076,8 @@ export function registerEvaluationRoutes(app: express.Express) {
         question: q.question,
         correctAnswer: q.answer,
         submittedAnswer: answers[q.question_id] || '',
-        isCorrect: (answers[q.question_id] || '').trim().toLowerCase() === q.answer.trim().toLowerCase(),
+        isCorrect: (answers[q.question_id] || '').trim().toLowerCase() === q.answer.trim().toLowerCase()
+          || matchesChoiceLetter(answers[q.question_id], q),
       })),
       // #402: this path never set rootCauses before, unlike the diagnostic
       // path — the same gap the override handler had, just one step
